@@ -1,0 +1,38 @@
+{
+  "true_skill": {
+    "Aurora-7B": 1.55,
+    "Solstice-XL": 1.3,
+    "Meridian-2": 1.05,
+    "Oakhart-v1": 0.88,
+    "Halcyon-mini": 0.6,
+    "Lumen-3": 0.45,
+    "Zephyr-Q": 0.18,
+    "Fenwick-9": -0.22,
+    "Tarragon-lite": -0.58
+  },
+  "position_bias": 0.3,
+  "verbosity_coef": 0.45,
+  "self_enhancement_model": "Halcyon-mini",
+  "self_enhancement_delta": 0.95,
+  "distractor_same_vendor_models": [
+    "Aurora-7B",
+    "Zephyr-Q"
+  ],
+  "true_ranking_best_to_worst": [
+    "Aurora-7B",
+    "Solstice-XL",
+    "Meridian-2",
+    "Oakhart-v1",
+    "Halcyon-mini",
+    "Lumen-3",
+    "Zephyr-Q",
+    "Fenwick-9",
+    "Tarragon-lite"
+  ],
+  "judge_vendor": "Nimbus AI",
+  "primary_session_tag": "s-7f2c91",
+  "audit_session_tag": "s-a91e08",
+  "audit_position_bias": -0.3,
+  "audit_verbosity_coef": -0.1,
+  "seed": 20260819
+}

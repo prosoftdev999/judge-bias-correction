@@ -1,0 +1,176 @@
+artifacts = ["/app/output.json"] # verifier reads the agent's final answer here
+
+[task]
+name = "afterquery/judge-bias-correction"
+
+[metadata]
+author_name = "Thomas Morison"    
+author_email = "matiasv931026@gmail.com"   
+difficulty_explanation = """
+Naive analysis of the judge transcripts (plain win-rate, or a Bradley-Terry
+fit that ignores position/verbosity/vendor covariates) recovers a WRONG
+ranking: the self-enhanced, verbosely-written model (true skill rank 5 of 9)
+is inflated to rank 3, and the shipped cheat/naive_guess/cheat.py baseline
+also misreports self_enhancement_model as "Aurora-7B" instead of
+"Halcyon-mini" (measured rho=0.950 vs the true order -- just under the 0.97
+floor, not a wide margin; the numeric bias estimates it reports are the
+placeholder 0.0/0.0, which miss by far more). Getting the
+true ranking right requires (a) recognizing that position bias, verbosity
+bias, and self-enhancement bias are simultaneously present and confounded
+with true skill in the raw judge data, (b) fitting a covariate-aware
+Bradley-Terry model (weighted logistic regression over ~9,360 pairwise
+judgments, correctly handling ties and the swap-pair structure) to separate
+position/verbosity effects from skill, (c) recognizing that self-enhancement
+bias is NOT identifiable from the judge data alone -- it is confounded with
+skill the same way a naive fit is -- and instead cross-calibrating against
+the smaller, independent human_calibration.jsonl set to detect it via a
+statistically significant skill gap, and (d) cleaning a judge_transcripts.jsonl
+that is NOT pristine: ~3% of rows carry a malformed judge_verdict (wrong
+case, typo, empty string, null) or a missing token count, injected by a
+logging defect and left undocumented beyond a general note in
+models_metadata.json, so a solution that doesn't defensively filter either
+crashes or silently corrupts the fit.
+
+TWO same-vendor models (Aurora-7B, Zephyr-Q) share the judge's vendor
+alongside the genuinely self-enhanced Halcyon-mini, specifically to block a
+"same vendor implies guilty" heuristic that skips the statistical test --
+with a single distractor a lucky guess has 50% odds; with two, a vendor-only
+heuristic has to beat 1-in-3 AND still get the ranking and bias numbers
+right independently, which it cannot. The nine true skills are also packed
+tightly in the middle of the field (several adjacent gaps as small as 0.13
+in log-odds), so the ranking-quality bar (Spearman rho >= 0.97) demands
+close to exact recovery, not just "roughly the right shape." Finally, a
+subtle correctness trap sits in the identifiability step itself: any
+Bradley-Terry fit needs to pin one model's skill to zero as a reference, and
+pinning a same-vendor model does that silently -- it can no longer show a
+nonzero judge-vs-human skill gap relative to itself, quietly disabling part
+of the self-enhancement test.
+
+judge_transcripts.jsonl also mixes in a second session_tag (~30% of rows):
+an independent QA judge with its own, materially different bias profile
+(opposite-signed position bias, near-zero verbosity effect, no vendor tie)
+run over a partial re-sample of the same matchups. Both session_tag values
+are opaque, non-self-descriptive codes sharing one shared prompt_id/swap_id
+namespace (identical numbering/format for both), so nothing about a row's
+own fields reveals which session it came from except grouping on
+session_tag itself and reasoning about it -- an agent cannot pattern-match
+a field value against the instruction's wording. The only textual signal
+is the instruction's repeated "the primary evaluation judge" framing, and
+models_metadata.json honestly notes that the two batches are very different
+sizes without saying which code is which; distinguishing "primary" from
+"audit" requires the same inference a real analyst would make (majority
+volume = the deployed production judge), not name-matching. An agent that
+gets every other step right -- data cleaning, weighted Bradley-Terry,
+correct tie handling, a safe identifiability reference -- but pools both
+session_tags without noticing recovers position/verbosity estimates about
+0.21 away from ground truth on this fixed dataset (measured during
+calibration), comfortably outside both numeric tolerances, while still
+passing the ranking and self-enhancement checks; only the full, correctly
+scoped analysis clears every check. This mirrors real, documented failure
+modes in LLM-evaluation practice (self-preference / verbosity / position
+bias in LLM-as-judge pipelines, and the kind of mixed-source, imperfectly
+logged data real eval pipelines actually produce), not an artificial trick:
+nothing is withheld that a competent evaluation engineer wouldn't know to
+check for, and the fictional model/vendor names make the specific answer
+unfindable online.
+
+judge_transcripts.jsonl has one more validity issue, invisible to any
+per-column scan (every field is individually well-formed): a fraction of
+swap_id groups have had one row's model_left/model_right flipped by a
+logging defect, leaving both rows of the group with the SAME
+(model_left, model_right) tuple instead of the complementary pair the
+instruction/metadata explicitly promise ("every real matchup is judged
+twice, once in each left/right order, sharing a swap_id"). Catching it
+requires grouping by swap_id and checking that invariant -- a relational
+check across row pairs, not a univariate one -- and dropping both rows of
+any group that fails it, since there's no way to tell which one (if
+either) is right. This corruption happens to concentrate on the
+self-enhanced model's own matchups in the sealed data (invisible ground
+truth the agent never needs to know or discover -- checking the invariant
+uniformly across all swap groups, as the documented contract calls for,
+catches it regardless of where it concentrates): a solution that gets
+every other step right but skips this check recovers a verbosity_coef_estimate
+about 0.088 away from ground truth (measured during calibration) --
+outside the 0.07 tolerance -- so it still fails even after correctly
+isolating the primary judge and cleaning the other two corruption types.
+"""
+solution_explanation = """
+Clean judge_transcripts.jsonl in three passes: (1) group by swap_id and drop
+both rows of any group whose (model_left, model_right) tuples aren't a
+complementary pair -- a logging defect flips one row's labels in a fraction
+of groups, leaving both rows with the same tuple instead; (2) group by
+session_tag and keep only the majority-count tag (the minority tag is a
+differently-biased audit judge and must not be pooled in -- neither tag's
+literal value is informative, so this must be derived from row counts, not
+hardcoded); (3) drop rows whose judge_verdict isn't exactly
+win_left/win_right/tie, or whose token counts aren't numeric.
+Then fit two weighted logistic regressions (tie rows split into 0.5/0.5
+pseudo-observations), both pinning the same reference model's skill to 0
+for identifiability -- the reference must be chosen OUTSIDE the judge's
+vendor, or the self-enhancement test below silently loses a candidate: (1)
+on the cleaned judge rows with covariates [position intercept, z-scored
+verbosity difference, per-model skill dummies], recovering the judge's
+position-bias and verbosity coefficients directly; (2) on
+human_calibration.jsonl with just per-model skill dummies, giving a
+bias-free skill estimate. The final ranking comes from the human-calibrated
+skill. Self-enhancement is detected by comparing, for each of the two
+candidate models sharing the judge's vendor, the judge-implied skill
+against the human-calibrated skill: the gap divided by its combined
+standard error (from the Fisher-information-based covariance of each fit)
+gives a z-score; whichever candidate clears z > 3 is reported (neither
+distractor does). Reference implementation: solution/solve.py.
+"""
+verification_explanation = """
+tests/test_verify.py reads only the agent artifact /app/output.json and
+compares it with sealed ground truth in the verifier image. It checks the
+four required fields, exact model membership, ranking quality, both bias
+estimates, and the self-enhancement label. Ranking uses Spearman rho >= 0.97:
+with nine tightly-packed models this permits at most one local adjacent
+inversion from calibration noise but rejects two such inversions or a larger
+ordering error -- the shipped naive win-rate cheat baseline measures
+rho=0.950, just under the floor (not a wide margin: it ranks the
+self-enhanced model 3rd instead of 5th, one spot closer to the top than its
+true position rank alone would suggest, and separately misreports
+self_enhancement_model). The numeric tolerances are 0.08 (position) and
+0.07 (verbosity). On this fixed dataset the reference fit has
+Fisher-information standard errors of about 0.027 (position) and 0.021
+(verbosity), so both tolerances are roughly 3-3.5 SE and comfortably cover
+the actual reference-fit error (0.0035 / 0.0157) and a legitimate refit
+that drops ties instead of half-weighting them (0.035 / 0.041, both still
+inside tolerance). At the same time they reject misspecifications measured
+during verifier calibration: treating every tie as a left win moves the
+position estimate by +0.292 (3.6x the tolerance); pooling both session_tag
+batches instead of isolating the majority one -- while doing everything
+else correctly -- moves position by -0.227 and verbosity by -0.217 (the
+audit judge's opposite-signed biases drag the pooled estimate the other
+way, roughly 3x both tolerances in magnitude); skipping the swap_id
+consistency check while doing everything else correctly moves
+verbosity_coef_estimate by +0.088 (outside the 0.07 tolerance) even though
+it still recovers the right ranking and self-enhancement label; and the
+naive/cheat baseline (which reports flat 0.0 for both) misses by 0.30 /
+0.45. self_enhancement_model
+must exactly match "Halcyon-mini"; either same-vendor distractor is a
+distinct wrong answer, and neither one's judge-vs-human skill gap clears a
+z=3 bar in the sealed reference fit (measured z of +0.93 and -0.67, vs
++6.88 for the true positive). Missing, malformed, non-finite, or incorrect
+required outputs fail.
+"""
+category = "ML"
+subcategory = "Evaluation"
+tags = ["llm-judge", "bias-correction", "bradley-terry", "statistics", "evaluation-methodology"]
+expert_time_estimate_hours = 10
+relevant_experience = "I am a senior AI and software engineer with 10+ years of engineering experience, including hands-on work with LLM evaluation, response ranking, reasoning analysis, prompt engineering, Python, automated testing with pytest, and Docker-based development. In my current AI engineering work, I build LLM-powered applications and evaluate model outputs for reasoning quality, instruction following, and overall response quality."
+
+[verifier]
+timeout_sec = 120.0
+environment_mode = "separate"
+
+[agent]
+timeout_sec = 7200.0
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 1
+memory_mb = 2048
+storage_mb = 10240
+gpus = 0

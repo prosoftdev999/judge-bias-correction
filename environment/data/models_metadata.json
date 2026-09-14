@@ -1,0 +1,46 @@
+{
+  "judge_vendor": "Nimbus AI",
+  "models": [
+    {
+      "name": "Aurora-7B",
+      "vendor": "Nimbus AI"
+    },
+    {
+      "name": "Halcyon-mini",
+      "vendor": "Nimbus AI"
+    },
+    {
+      "name": "Zephyr-Q",
+      "vendor": "Nimbus AI"
+    },
+    {
+      "name": "Solstice-XL",
+      "vendor": "Cobalt Labs"
+    },
+    {
+      "name": "Fenwick-9",
+      "vendor": "Cobalt Labs"
+    },
+    {
+      "name": "Lumen-3",
+      "vendor": "Cobalt Labs"
+    },
+    {
+      "name": "Meridian-2",
+      "vendor": "Vertex Systems"
+    },
+    {
+      "name": "Tarragon-lite",
+      "vendor": "Vertex Systems"
+    },
+    {
+      "name": "Oakhart-v1",
+      "vendor": "Vertex Systems"
+    }
+  ],
+  "length_normalization": {
+    "mean": 480.0,
+    "sd": 90.0
+  },
+  "notes": "judge_transcripts.jsonl: response_*_tokens are token counts of the two candidate responses shown to the judge for that record. Every real matchup between two models is judged twice, once in each left/right order, sharing a swap_id. session_tag records which logging session produced the verdict; verdicts were collected in two session batches of very different size -- the larger batch is the evaluation team's deployed production judge, the smaller is an independent audit sample collected separately. A small fraction of records also have a malformed judge_verdict or a missing token count due to logging issues upstream; these should be excluded rather than fitted. human_calibration.jsonl: a smaller, independently collected set of human preference labels for the same matchups (fields model_a/model_b/human_verdict; win_a, win_b, or tie)."
+}
